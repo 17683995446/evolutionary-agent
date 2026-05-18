@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Storage & Logs
+storage/
+logs/
+*.log
+*.pkl
+*.json
+
+# Test artifacts
+*_storage/
+test_storage/
+verify_storage/
+stress_test_storage/
+chaos_test_storage/
+quick_test_storage/
+*_reports/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
