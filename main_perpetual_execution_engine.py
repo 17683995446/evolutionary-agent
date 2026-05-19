@@ -115,7 +115,7 @@ class MainPerpetualExecutionEngine:
     async def initialize_system(self) -> bool:
         """系统初始化 - 按依赖顺序启动各组件"""
         print("[ENGINE] Initializing perpetual execution system...")
-        
+
         init_sequence = [
             ("Configuration Loader", self.config_loader.initialize()),
             ("State Manager", self.state_manager.initialize()),
@@ -125,18 +125,41 @@ class MainPerpetualExecutionEngine:
             ("Optimization Analyzer", self.optimization_analyzer.initialize()),
             ("Deployment Pipeline", self.deployment_pipeline.initialize()),
         ]
-        
+
+        # 修复(BUG-ENGINE-3): 跟踪已初始化的组件，失败时清理
+        shutdown_sequence = [
+            ("Deployment Pipeline", self.deployment_pipeline.shutdown()),
+            ("Optimization Analyzer", self.optimization_analyzer.shutdown()),
+            ("Task Execution Worker", self.task_worker.shutdown()),
+            ("Guardian Daemon", self.guardian_daemon.shutdown()),
+            ("Knowledge Graph Engine", self.knowledge_engine.shutdown()),
+            ("State Manager", self.state_manager.shutdown()),
+            ("Configuration Loader", self.config_loader.shutdown()),
+        ]
+
+        initialized_count = 0
         for name, coro in init_sequence:
             try:
                 await asyncio.wait_for(coro, timeout=10.0)
                 print(f"[ENGINE] ✓ {name} initialized")
+                initialized_count += 1
             except Exception as e:
                 print(f"[ENGINE] ✗ {name} failed: {e}")
+                # 修复(BUG-ENGINE-3): 清理已初始化的组件（逆序）
+                print(f"[ENGINE] Cleaning up {initialized_count} already-initialized components...")
+                for prev_name, prev_coro in shutdown_sequence:
+                    if init_sequence[initialized_count][0] == prev_name:
+                        break
+                    try:
+                        await asyncio.wait_for(prev_coro, timeout=5.0)
+                        print(f"[ENGINE] ✓ {prev_name} cleaned up")
+                    except Exception as cleanup_err:
+                        print(f"[ENGINE] ✗ {prev_name} cleanup failed: {cleanup_err}")
                 return False
-        
+
         # 注册信号处理器
         self._register_signal_handlers()
-        
+
         print("[ENGINE] System initialization complete")
         return True
     

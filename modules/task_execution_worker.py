@@ -115,6 +115,9 @@ class TaskExecutionWorker:
         self.task_timeout_seconds = task_timeout_seconds
         self.max_task_retention = max_task_retention
         
+        # 背压控制：当内存中任务数超过此阈值时，拒绝新任务
+        self._backpressure_threshold = int(max_task_retention * 0.8)
+        
         # 任务队列（按优先级排序）
         self._task_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(
             maxsize=task_queue_size
@@ -215,7 +218,17 @@ class TaskExecutionWorker:
             optimization_rules=self._optimization_rules.copy()
         )
         
+        # 背压控制：检查内存中任务数是否超过阈值
+        if len(self._tasks) >= self._backpressure_threshold:
+            raise RuntimeError(f"Backpressure: too many tasks in memory ({len(self._tasks)}/{self._backpressure_threshold})")
+        
         self._tasks[task_id] = task
+        
+        # 检查队列是否已满（使用put_nowait避免无限阻塞）
+        if self._task_queue.qsize() >= self.task_queue_size * 0.95:
+            # 队列接近满，移除任务并抛出异常
+            del self._tasks[task_id]
+            raise RuntimeError(f"Task queue full ({self._task_queue.qsize()}/{self.task_queue_size})")
         
         # 按优先级放入队列（priority值越小优先级越高）
         await self._task_queue.put((priority.value, task_id))

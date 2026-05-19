@@ -264,14 +264,20 @@ class DualProcessOrchestrator:
         await asyncio.sleep(0.1)
     
     async def _execution_to_optimizer_flow(self):
-        """执行数据流向优化层的管道"""
+        """执行数据流向优化层的管道 - 仅传输新增数据，避免与_optimization_phase重复"""
+        last_processed_count = 0
         while self._is_running:
             try:
-                # 定期将执行数据传递给优化层
-                execution_history = self.task_worker.get_execution_history(limit=20)
-                for record in execution_history:
+                # 修复(CROSS-4): 只获取上次处理之后的新记录，避免重复喂入
+                current_history = self.task_worker.get_execution_history(limit=10000)
+                total_count = len(current_history)
+                new_records = current_history[last_processed_count:]
+
+                for record in new_records:
                     self.optimization_analyzer.feed_execution_data(record)
-                
+
+                last_processed_count = total_count
+
                 await asyncio.sleep(2)
             except Exception as e:
                 print(f"[ORCHESTRATOR] Data flow error: {e}")
@@ -299,18 +305,31 @@ class DualProcessOrchestrator:
         print("[ORCHESTRATOR] Recovering task executor...")
         await self.task_worker.initialize()
         await self.task_worker.start_execution_loop()
-    
+        # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
+        if self.task_worker._worker_task:
+            self._layer_tasks.append(self.task_worker._worker_task)
+        if self.task_worker._cleanup_task:
+            self._layer_tasks.append(self.task_worker._cleanup_task)
+
     async def _recover_optimizer(self):
         """恢复优化分析器"""
         print("[ORCHESTRATOR] Recovering optimizer...")
         await self.optimization_analyzer.initialize()
         await self.optimization_analyzer.start_analysis_loop()
-    
+        # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
+        if self.optimization_analyzer._analyzer_task:
+            self._layer_tasks.append(self.optimization_analyzer._analyzer_task)
+
     async def _recover_deployer(self):
         """恢复部署管道"""
         print("[ORCHESTRATOR] Recovering deployment pipeline...")
         await self.deployment_pipeline.initialize()
         await self.deployment_pipeline.start_deployment_loop()
+        # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
+        if self.deployment_pipeline._pipeline_task:
+            self._layer_tasks.append(self.deployment_pipeline._pipeline_task)
+        if self.deployment_pipeline._validation_task:
+            self._layer_tasks.append(self.deployment_pipeline._validation_task)
     
     # ============== 关闭接口 ==============
     
