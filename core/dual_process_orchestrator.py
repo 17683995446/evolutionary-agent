@@ -303,6 +303,10 @@ class DualProcessOrchestrator:
     async def _recover_task_executor(self):
         """恢复任务执行器"""
         print("[ORCHESTRATOR] Recovering task executor...")
+        # 修复(BUG-ORCH-2): 先关闭旧组件，取消其tasks
+        await self.task_worker.shutdown()
+        # 清理已完成的tasks
+        self._layer_tasks = [t for t in self._layer_tasks if not t.done()]
         await self.task_worker.initialize()
         await self.task_worker.start_execution_loop()
         # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
@@ -314,6 +318,10 @@ class DualProcessOrchestrator:
     async def _recover_optimizer(self):
         """恢复优化分析器"""
         print("[ORCHESTRATOR] Recovering optimizer...")
+        # 修复(BUG-ORCH-2): 先关闭旧组件，取消其tasks
+        await self.optimization_analyzer.shutdown()
+        # 清理已完成的tasks
+        self._layer_tasks = [t for t in self._layer_tasks if not t.done()]
         await self.optimization_analyzer.initialize()
         await self.optimization_analyzer.start_analysis_loop()
         # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
@@ -323,6 +331,10 @@ class DualProcessOrchestrator:
     async def _recover_deployer(self):
         """恢复部署管道"""
         print("[ORCHESTRATOR] Recovering deployment pipeline...")
+        # 修复(BUG-ORCH-2): 先关闭旧组件，取消其tasks
+        await self.deployment_pipeline.shutdown()
+        # 清理已完成的tasks
+        self._layer_tasks = [t for t in self._layer_tasks if not t.done()]
         await self.deployment_pipeline.initialize()
         await self.deployment_pipeline.start_deployment_loop()
         # 修复(BUG-ORCH-1): 将恢复后新创建的task添加到跟踪列表
