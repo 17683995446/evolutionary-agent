@@ -246,12 +246,9 @@ class DualProcessOrchestrator:
         """优化阶段 - 分析并生成优化方案"""
         self.optimization_cycles += 1
         
-        # 获取执行历史并喂给优化器
-        execution_history = self.task_worker.get_execution_history(limit=50)
-        for record in execution_history:
-            self.optimization_analyzer.feed_execution_data(record)
-        
-        # 优化分析器在后台运行，这里只是触发数据喂养
+        # 修复(RISK-INT-3): 移除重复数据喂入
+        # 数据喂养已由 _execution_to_optimizer_flow 处理，这里只触发分析
+        # 优化分析器在后台运行，这里只是确保分析循环被触发
         await asyncio.sleep(0.1)
     
     async def _synchronization_phase(self, cycle_metrics: CycleMetrics):

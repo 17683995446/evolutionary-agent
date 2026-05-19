@@ -586,27 +586,33 @@ class KnowledgeGraphIntegrationEngine:
                 print(f"[KNOWLEDGE] Cleanup error: {e}")
     
     async def _do_cleanup(self):
-        """执行一次清理"""
+        """执行一次清理 - 修复(RISK-PERF-1): 清理所有类型节点，不只是execution"""
         if len(self._nodes) > self.max_nodes_in_memory * 0.2:
             current_time = time.time()
             nodes_to_remove = []
             
-            # 找出最旧的执行记录节点
+            # 修复(RISK-PERF-1): 清理所有类型的旧节点，不只是execution
             for node_id, node in list(self._nodes.items()):
-                if node.node_type == "execution":
-                    age = current_time - node.created_at
-                    if age > self._max_node_age_seconds:
-                        nodes_to_remove.append(node_id)
+                age = current_time - node.created_at
+                if age > self._max_node_age_seconds:
+                    nodes_to_remove.append(node_id)
             
-            # 清理节点
+            # 清理节点和索引
             for node_id in nodes_to_remove[:10000]:
                 node = self._nodes.pop(node_id, None)
                 if node:
                     self._type_index[node.node_type].discard(node_id)
+                    # 修复(RISK-CONSIST-2): 清理空类型索引
+                    if not self._type_index[node.node_type]:
+                        del self._type_index[node.node_type]
                     for tag in node.tags:
                         self._tag_index[tag].discard(node_id)
+                        # 修复(RISK-CONSIST-2): 清理空标签索引
+                        if not self._tag_index[tag]:
+                            del self._tag_index[tag]
                     self._stats["total_nodes"] -= 1
-                    self._stats["node_types"][node.node_type] -= 1
+                    if node.node_type in self._stats["node_types"]:
+                        self._stats["node_types"][node.node_type] -= 1
             
             if nodes_to_remove:
                 print(f"[KNOWLEDGE] Cleaned up {len(nodes_to_remove)} old nodes, remaining: {len(self._nodes)}")
