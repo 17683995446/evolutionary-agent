@@ -112,6 +112,10 @@ class KnowledgeGraphIntegrationEngine:
         # 内存管理
         self._node_access_times: Dict[str, float] = {}
         self._max_node_age_seconds = 120  # 2分钟（执行记录快速过期）
+
+        # 修复(R10-CONCURRENT-02): 添加锁保护并发更新
+        self._nodes_lock = asyncio.Lock()
+        self._id_counter = 0  # 用于生成唯一ID
         
     async def initialize(self):
         """初始化知识图谱引擎"""
@@ -209,9 +213,13 @@ class KnowledgeGraphIntegrationEngine:
         except Exception as e:
             print(f"[KNOWLEDGE] Error saving to storage: {e}")
     
-    def _generate_id(self, content: str) -> str:
-        """生成唯一ID"""
-        return hashlib.md5(f"{content}_{time.time()}".encode()).hexdigest()[:16]
+    async def _generate_id(self, content: str) -> str:
+        """生成唯一ID（修复R10-CONCURRENT-02: 使用原子计数器确保唯一性）"""
+        async with self._nodes_lock:
+            self._id_counter += 1
+            timestamp = time.time()
+            unique_str = f"{content}_{timestamp}_{self._id_counter}"
+            return hashlib.md5(unique_str.encode()).hexdigest()[:16]
     
     # ============== 知识添加接口 ==============
     
@@ -222,7 +230,7 @@ class KnowledgeGraphIntegrationEngine:
         data: Dict[str, Any]
     ) -> str:
         """添加执行记录"""
-        node_id = self._generate_id(f"{task_type}_{action}_{time.time()}")
+        node_id = await self._generate_id(f"{task_type}_{action}_{time.time()}")
         
         node = KnowledgeNode(
             node_id=node_id,
@@ -249,7 +257,7 @@ class KnowledgeGraphIntegrationEngine:
     
     async def add_optimization_record(self, analysis_data: Dict[str, Any]) -> str:
         """添加优化记录"""
-        node_id = self._generate_id(f"optimization_{time.time()}")
+        node_id = await self._generate_id(f"optimization_{time.time()}")
         
         node = KnowledgeNode(
             node_id=node_id,
@@ -286,7 +294,7 @@ class KnowledgeGraphIntegrationEngine:
         context: Dict[str, Any]
     ) -> str:
         """添加错误模式"""
-        node_id = self._generate_id(f"error_{error_type}_{time.time()}")
+        node_id = await self._generate_id(f"error_{error_type}_{time.time()}")
         
         node = KnowledgeNode(
             node_id=node_id,
@@ -319,7 +327,7 @@ class KnowledgeGraphIntegrationEngine:
         context: Dict[str, Any]
     ) -> str:
         """添加成功模式"""
-        node_id = self._generate_id(f"pattern_{pattern_type}_{time.time()}")
+        node_id = await self._generate_id(f"pattern_{pattern_type}_{time.time()}")
         
         node = KnowledgeNode(
             node_id=node_id,
@@ -353,7 +361,7 @@ class KnowledgeGraphIntegrationEngine:
         )
         
         for exec_node in recent_executions[:10]:  # 只关联最近10个
-            edge_id = self._generate_id(f"rel_{optimization_node_id}_{exec_node.node_id}")
+            edge_id = await self._generate_id(f"rel_{optimization_node_id}_{exec_node.node_id}")
             
             edge = KnowledgeEdge(
                 edge_id=edge_id,

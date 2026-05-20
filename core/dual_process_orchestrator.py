@@ -113,8 +113,21 @@ class DualProcessOrchestrator:
                     self._optimization_phase(cycle_metrics)
                 )
                 
-                # 等待两个阶段完成
-                await asyncio.gather(execution_task, optimization_task)
+                # 等待两个阶段完成（修复R10-CASCADE-01: 添加超时保护防止永久阻塞）
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(execution_task, optimization_task),
+                        timeout=300.0  # 5分钟超时保护
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[ORCHESTRATOR] Cycle {cycle_number} timed out, cancelling tasks...")
+                    execution_task.cancel()
+                    optimization_task.cancel()
+                    try:
+                        await asyncio.gather(execution_task, optimization_task, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        pass
+                    raise RuntimeError(f"Cycle {cycle_number} exceeded 300s timeout")
                 
                 # ========== 阶段3: 同步阶段 ==========
                 await self._synchronization_phase(cycle_metrics)
