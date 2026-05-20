@@ -207,7 +207,13 @@ class TaskExecutionWorker:
             任务ID
         """
         task_id = str(uuid.uuid4())
-        
+
+        # 修复(R8-DF-02): 防御性校验 payload，确保是字典类型
+        if payload is None:
+            payload = {}
+        elif not isinstance(payload, dict):
+            raise TypeError(f"payload must be a dict, got {type(payload).__name__}")
+
         task = Task(
             id=task_id,
             name=name,
@@ -476,8 +482,10 @@ class TaskExecutionWorker:
                         to_remove = to_remove[:-keep_count]
                     
                     for task_id in to_remove:
-                        self._tasks.pop(task_id, None)
-                        self._completed_task_ids.discard(task_id)
+                        # 修复(R9-STATE-02): 跳过正在执行的任务，防止引用丢失
+                        if task_id not in self._running_tasks:
+                            self._tasks.pop(task_id, None)
+                            self._completed_task_ids.discard(task_id)
                     
                     if to_remove:
                         print(f"[EXECUTOR] Cleaned up {len(to_remove)} completed tasks, remaining: {len(self._tasks)}")

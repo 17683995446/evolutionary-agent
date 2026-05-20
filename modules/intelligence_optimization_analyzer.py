@@ -365,6 +365,8 @@ class IntelligenceOptimizationAnalyzer:
                 if recent_success_rate < 0.3 and rule.applied_count > 20:
                     print(f"[OPTIMIZER] Rule {rule_id} underperforming, removing")
                     del self._optimization_rules[rule_id]
+                    # 修复(R9-CASCADE-04): 清理孤儿效果数据，防止内存泄漏
+                    self._rule_effectiveness.pop(rule_id, None)
     
     async def _record_analysis_to_knowledge(
         self,

@@ -64,6 +64,10 @@ class SynchronizationDeploymentPipeline:
         self.optimization_analyzer = optimization_analyzer
         self.validation_window_seconds = validation_window_seconds
         self.deployment_cooldown_seconds = deployment_cooldown_seconds
+
+        # 修复(R9-STATE-04): 记录管道启动时间，用于计算真实吞吐速率
+        self._pipeline_start_time = time.time()
+        self._last_completed_count = 0
         
         # 部署队列
         self._deployment_queue: asyncio.Queue = asyncio.Queue()
@@ -266,10 +270,18 @@ class SynchronizationDeploymentPipeline:
     async def _rollback_deployment(self, deployment: DeploymentRecord, reason: str):
         """回滚部署"""
         print(f"[DEPLOYER] Rolling back rule {deployment.rule_id}: {reason}")
-        
+
         try:
-            # 移除优化规则
-            self.task_worker.update_optimization_rules({deployment.target_component: {}})
+            # 修复(R9-CASCADE-01): 只移除被回滚的特定规则，不影响同一组件的其他规则
+            current_rules = dict(self.task_worker._optimization_rules)
+            if deployment.target_component in current_rules:
+                # 检查当前规则是否与部署时的参数匹配
+                if current_rules[deployment.target_component] == deployment.parameters:
+                    del current_rules[deployment.target_component]
+                else:
+                    # 规则已被后续部署覆盖，不删除（避免误删新规则）
+                    print(f"[DEPLOYER] ~ Rule for {deployment.target_component} already updated, skipping deletion")
+            self.task_worker.update_optimization_rules(current_rules)
             
             # 更新状态
             deployment.status = DeploymentStatus.ROLLED_BACK
@@ -290,12 +302,19 @@ class SynchronizationDeploymentPipeline:
         """捕获当前性能基线"""
         heartbeat = self.task_worker.get_heartbeat()
         metrics = heartbeat.get("metrics", {})
-        
+
+        # 修复(R9-STATE-04): 使用真实速率计算吞吐量
+        current_completed = metrics.get("total_completed", 0)
+        elapsed = max(time.time() - self._pipeline_start_time, 1.0)
+        throughput = (current_completed - self._last_completed_count) / max(elapsed, 1.0)
+        self._last_completed_count = current_completed
+        self._pipeline_start_time = time.time()  # 重置窗口
+
         return {
             "avg_execution_time_ms": metrics.get("avg_execution_time_ms", 0),
             "queue_size": float(metrics.get("queue_size", 0)),
             "success_rate": 1.0 - (metrics.get("total_failed", 0) / max(metrics.get("total_completed", 1), 1)),
-            "throughput": metrics.get("total_completed", 0) / max(time.time() - metrics.get("start_time", time.time()), 1)
+            "throughput": throughput
         }
     
     def _update_avg_deployment_time(self, deployment_time_ms: float):

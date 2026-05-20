@@ -128,13 +128,13 @@ class MainPerpetualExecutionEngine:
 
         # 修复(BUG-ENGINE-3): 跟踪已初始化的组件，失败时清理
         shutdown_sequence = [
-            ("Deployment Pipeline", self.deployment_pipeline.shutdown()),
-            ("Optimization Analyzer", self.optimization_analyzer.shutdown()),
-            ("Task Execution Worker", self.task_worker.shutdown()),
-            ("Guardian Daemon", self.guardian_daemon.shutdown()),
-            ("Knowledge Graph Engine", self.knowledge_engine.shutdown()),
-            ("State Manager", self.state_manager.shutdown()),
-            ("Configuration Loader", self.config_loader.shutdown()),
+            ("Deployment Pipeline", self.deployment_pipeline.shutdown),
+            ("Optimization Analyzer", self.optimization_analyzer.shutdown),
+            ("Task Execution Worker", self.task_worker.shutdown),
+            ("Guardian Daemon", self.guardian_daemon.shutdown),
+            ("Knowledge Graph Engine", self.knowledge_engine.shutdown),
+            ("State Manager", self.state_manager.shutdown),
+            ("Configuration Loader", self.config_loader.shutdown),
         ]
 
         initialized_count = 0
@@ -145,13 +145,14 @@ class MainPerpetualExecutionEngine:
                 initialized_count += 1
             except Exception as e:
                 print(f"[ENGINE] ✗ {name} failed: {e}")
-                # 修复(BUG-ENGINE-3): 清理已初始化的组件（逆序）
+                # 修复(BUG-ENGINE-3/R8-MISC-01): 清理已初始化的组件（逆序）
+                # shutdown_sequence 是逆序的，前 (7 - initialized_count) 个是未初始化的
+                # 已初始化的组件对应 shutdown_sequence 中从索引 (7 - initialized_count) 开始
+                num_to_skip = len(init_sequence) - initialized_count
                 print(f"[ENGINE] Cleaning up {initialized_count} already-initialized components...")
-                for prev_name, prev_coro in shutdown_sequence:
-                    if init_sequence[initialized_count][0] == prev_name:
-                        break
+                for prev_name, prev_shutdown_fn in shutdown_sequence[num_to_skip:]:
                     try:
-                        await asyncio.wait_for(prev_coro, timeout=5.0)
+                        await asyncio.wait_for(prev_shutdown_fn(), timeout=5.0)
                         print(f"[ENGINE] ✓ {prev_name} cleaned up")
                     except Exception as cleanup_err:
                         print(f"[ENGINE] ✗ {prev_name} cleanup failed: {cleanup_err}")

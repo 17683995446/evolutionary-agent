@@ -261,19 +261,18 @@ class DualProcessOrchestrator:
         await asyncio.sleep(0.1)
     
     async def _execution_to_optimizer_flow(self):
-        """执行数据流向优化层的管道 - 仅传输新增数据，避免与_optimization_phase重复"""
-        last_processed_count = 0
+        """执行数据流向优化层的管道 - 基于时间戳追踪，避免 deque 截断导致数据丢失"""
+        last_seen_timestamp = 0.0
         while self._is_running:
             try:
-                # 修复(CROSS-4): 只获取上次处理之后的新记录，避免重复喂入
+                # 修复(R9-STATE-01): 使用时间戳而非偏移量追踪，deque 截断不会影响
                 current_history = self.task_worker.get_execution_history(limit=10000)
-                total_count = len(current_history)
-                new_records = current_history[last_processed_count:]
+                new_records = [r for r in current_history if r.get("timestamp", 0) > last_seen_timestamp]
 
                 for record in new_records:
                     self.optimization_analyzer.feed_execution_data(record)
-
-                last_processed_count = total_count
+                    if record.get("timestamp", 0) > last_seen_timestamp:
+                        last_seen_timestamp = record["timestamp"]
 
                 await asyncio.sleep(2)
             except Exception as e:
@@ -347,19 +346,35 @@ class DualProcessOrchestrator:
         print("[ORCHESTRATOR] Initiating graceful shutdown...")
         self._is_running = False
         self._shutdown_requested = True
-        
+
+        # 修复(R8-SD-03): 先调用各组件的 shutdown 方法，保存状态和关闭资源
+        # 按依赖逆序关闭
+        component_shutdown_sequence = [
+            ("Deployment Pipeline", self.deployment_pipeline.shutdown),
+            ("Optimization Analyzer", self.optimization_analyzer.shutdown),
+            ("Task Execution Worker", self.task_worker.shutdown),
+            ("Guardian Daemon", self.guardian_daemon.shutdown),
+            ("Knowledge Graph Engine", self.knowledge_engine.shutdown),
+        ]
+        for comp_name, shutdown_fn in component_shutdown_sequence:
+            try:
+                await asyncio.wait_for(shutdown_fn(), timeout=10.0)
+                print(f"[ORCHESTRATOR] ✓ {comp_name} shutdown complete")
+            except Exception as e:
+                print(f"[ORCHESTRATOR] ✗ {comp_name} shutdown error: {e}")
+
         # 取消所有数据流任务
         for task in self._tasks:
             task.cancel()
-        
+
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-        
+
         # 修复(RL-1)：取消所有层启动的后台任务
         for task in self._layer_tasks:
             task.cancel()
-        
+
         if self._layer_tasks:
             await asyncio.gather(*self._layer_tasks, return_exceptions=True)
-        
+
         print("[ORCHESTRATOR] Graceful shutdown complete")

@@ -76,7 +76,11 @@ class ResidentGuardianDaemon:
         # 监控任务
         self._monitor_task: Optional[asyncio.Task] = None
         self._self_monitor_task: Optional[asyncio.Task] = None
-        
+
+        # 修复(R8-SD-04): 跟踪恢复过程中创建的异步任务，确保关闭时能取消
+        self._recovery_tasks: List[asyncio.Task] = []
+        self._recovery_lock = asyncio.Lock()  # 防止并发恢复
+
         # 运行状态
         self._is_running = False
         self._daemon_start_time = 0.0
@@ -259,32 +263,58 @@ class ResidentGuardianDaemon:
     async def _trigger_recovery(self, component_name: str):
         """触发组件恢复流程"""
         health = self._component_health[component_name]
-        
+
         if health.recovery_attempts >= self.max_recovery_attempts:
             print(f"[GUARDIAN] ✗ {component_name} max recovery attempts reached")
             health.status = HealthStatus.CRITICAL
             return
-        
-        health.recovery_attempts += 1
-        health.status = HealthStatus.RECOVERING
-        
-        print(f"[GUARDIAN] → Attempting recovery for {component_name} "
-              f"(attempt {health.recovery_attempts}/{self.max_recovery_attempts})")
-        
-        recovery_callback = self._recovery_callbacks.get(component_name)
-        if recovery_callback:
-            try:
-                if asyncio.iscoroutinefunction(recovery_callback):
-                    await asyncio.wait_for(recovery_callback(), timeout=30.0)
-                else:
-                    recovery_callback()
-                
-                print(f"[GUARDIAN] ✓ {component_name} recovery successful")
-                health.error_count = 0
-                
-            except Exception as e:
-                print(f"[GUARDIAN] ✗ {component_name} recovery failed: {e}")
-                health.status = HealthStatus.UNHEALTHY
+
+        # 修复(R8-SD-04): 恢复前检查 shutdown 状态，避免关闭期间发起恢复
+        if self.shutdown_event.is_set() or not self._is_running:
+            print(f"[GUARDIAN] Skipping recovery for {component_name}: shutdown in progress")
+            return
+
+        # 使用锁防止同一组件并发恢复
+        async with self._recovery_lock:
+            # 再次检查（可能在等待锁期间收到 shutdown）
+            if self.shutdown_event.is_set() or not self._is_running:
+                print(f"[GUARDIAN] Skipping recovery for {component_name}: shutdown in progress")
+                return
+
+            health.recovery_attempts += 1
+            health.status = HealthStatus.RECOVERING
+
+            print(f"[GUARDIAN] → Attempting recovery for {component_name} "
+                  f"(attempt {health.recovery_attempts}/{self.max_recovery_attempts})")
+
+            recovery_callback = self._recovery_callbacks.get(component_name)
+            if recovery_callback:
+                try:
+                    # 将恢复过程包装为 task 以便跟踪
+                    recovery_task = asyncio.ensure_future(
+                        asyncio.wait_for(recovery_callback(), timeout=30.0)
+                    )
+                    self._recovery_tasks.append(recovery_task)
+
+                    await recovery_task
+
+                    # 恢复完成后从跟踪列表移除
+                    self._recovery_tasks = [
+                        t for t in self._recovery_tasks if t is not recovery_task
+                    ]
+
+                    print(f"[GUARDIAN] ✓ {component_name} recovery successful")
+                    health.error_count = 0
+
+                except asyncio.TimeoutError:
+                    print(f"[GUARDIAN] ✗ {component_name} recovery timed out")
+                    health.status = HealthStatus.UNHEALTHY
+                except asyncio.CancelledError:
+                    print(f"[GUARDIAN] ✗ {component_name} recovery cancelled (shutdown)")
+                    health.status = HealthStatus.UNHEALTHY
+                except Exception as e:
+                    print(f"[GUARDIAN] ✗ {component_name} recovery failed: {e}")
+                    health.status = HealthStatus.UNHEALTHY
     
     async def _self_monitoring_loop(self):
         """自监控循环 - 确保守护进程自身健康"""
@@ -333,7 +363,16 @@ class ResidentGuardianDaemon:
         """关闭守护进程"""
         print("[GUARDIAN] Shutting down guardian daemon...")
         self._is_running = False
-        
+
+        # 修复(R8-SD-04): 取消所有正在进行的恢复任务
+        for recovery_task in self._recovery_tasks:
+            if not recovery_task.done():
+                recovery_task.cancel()
+
+        if self._recovery_tasks:
+            await asyncio.gather(*self._recovery_tasks, return_exceptions=True)
+            self._recovery_tasks.clear()
+
         if self._monitor_task:
             self._monitor_task.cancel()
             try:
